@@ -634,6 +634,11 @@ body.cinematic-ui-hidden #hud-bottom {
     white-space: nowrap;
   }
 
+  /* Lobby button full width on mobile */
+  #btn-lobby {
+    grid-column: span 6;
+  }
+
   /* 3 Game Action buttons in a 3-column row */
   #btn-side-toggle,
   #btn-ai-move,
@@ -755,4 +760,174 @@ body.cinematic-ui-hidden #hud-bottom {
     grid-column: span 3;
   }
 }
+
+@media (min-width: 769px) and (max-width: 1250px) {
+  #hud-top {
+    left: 14px;
+    right: 14px;
+    gap: 8px;
+  }
+  #hud-right {
+    gap: 6px;
+  }
+  .hud-btn {
+    padding: 7px 11px;
+    font-size: 0.76rem;
+  }
+}
+
+/* Lobby Modal Styles */
+.modal-backdrop {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  background: rgba(4, 6, 12, 0.85);
+  backdrop-filter: blur(6px);
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.25s ease;
+}
+
+.modal-backdrop.open {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.modal-card {
+  width: 90%;
+  max-width: 440px;
+  background: rgba(14, 18, 28, 0.95);
+  border: 1.5px solid rgba(212, 175, 55, 0.45);
+  border-radius: 14px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.75), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  padding: 22px;
+  color: #f0ece1;
+  font-family: 'Inter', sans-serif;
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+  border-bottom: 1px solid rgba(212, 175, 55, 0.25);
+  padding-bottom: 12px;
+}
+
+.modal-title {
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: #f5d76e;
+  margin: 0;
+}
+
+.modal-close {
+  background: none;
+  border: none;
+  color: #d4af37;
+  font-size: 1.2rem;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 4px;
+}
+
+.modal-close:hover {
+  background: rgba(212, 175, 55, 0.15);
+}
+
+.modal-tabs {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 16px;
+}
+
+.modal-tab {
+  flex: 1;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(212, 175, 55, 0.2);
+  border-radius: 6px;
+  color: #b3b8c5;
+  padding: 8px 6px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.modal-tab.active {
+  background: rgba(212, 175, 55, 0.18);
+  border-color: #d4af37;
+  color: #f5d76e;
+}
+
+.modal-section-title {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #d4af37;
+  margin-bottom: 8px;
+}
+
+.color-picker-grid {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.color-pick-btn {
+  flex: 1;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(212, 175, 55, 0.2);
+  border-radius: 6px;
+  color: #f0ece1;
+  padding: 9px;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.color-pick-btn.selected {
+  background: rgba(212, 175, 55, 0.22);
+  border-color: #d4af37;
+  color: #f5d76e;
+  font-weight: 600;
+}
+
+.modal-primary-btn {
+  width: 100%;
+  background: linear-gradient(135deg, #d4af37, #aa8220);
+  border: none;
+  border-radius: 6px;
+  color: #0c0f16;
+  font-weight: 700;
+  padding: 10px;
+  font-size: 0.88rem;
+  cursor: pointer;
+  margin-top: 6px;
+  box-shadow: 0 4px 12px rgba(212, 175, 55, 0.3);
+}
+
+.modal-primary-btn:hover {
+  filter: brightness(1.1);
+}
+
+.modal-secondary-btn {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(212, 175, 55, 0.3);
+  border-radius: 6px;
+  color: #f0ece1;
+  padding: 7px 12px;
+  font-size: 0.78rem;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.modal-secondary-btn:hover {
+  background: rgba(212, 175, 55, 0.15);
+}
+
 

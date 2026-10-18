@@ -56,15 +56,15 @@ export function initWizardChess() {
 
     function getTargetPixelRatio(quality) {
       const dpr = window.devicePixelRatio || 1;
-      if (quality === 'fast') return 1.0;
-      if (quality === 'ultra') return Math.min(dpr, 1.75);
-      // 'smooth' (default balanced 60 FPS)
-      return isMobileDevice ? 1.0 : Math.min(dpr, 1.25);
+      if (quality === 'fast') return Math.min(dpr, 1.0);
+      if (quality === 'ultra') return Math.min(dpr, 2.0);
+      // 'smooth' maintains high-fidelity native sharpness
+      return Math.min(dpr, 1.5);
     }
 
     renderer.setPixelRatio(getTargetPixelRatio(currentGraphicsQuality));
     renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = THREE.PCFShadowMap;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     renderer.shadowMap.autoUpdate = false;
     renderer.shadowMap.needsUpdate = true;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -282,13 +282,13 @@ export function initWizardChess() {
         keyLight.shadow.mapSize.height = 512;
         renderer.shadowMap.type = THREE.BasicShadowMap;
       } else if (quality === 'ultra') {
-        keyLight.shadow.mapSize.width = 1536;
-        keyLight.shadow.mapSize.height = 1536;
+        keyLight.shadow.mapSize.width = 2048;
+        keyLight.shadow.mapSize.height = 2048;
         renderer.shadowMap.type = THREE.PCFSoftShadowMap;
       } else {
         keyLight.shadow.mapSize.width = 1024;
         keyLight.shadow.mapSize.height = 1024;
-        renderer.shadowMap.type = THREE.PCFShadowMap;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
       }
       if (keyLight.shadow.map) {
         keyLight.shadow.map.dispose();
@@ -994,6 +994,16 @@ export function initWizardChess() {
         vBar.receiveShadow = true;
         boardGroup.add(vBar);
       }
+
+      // Freeze matrix computation on static chessboard tiles and borders
+      boardGroup.traverse((child) => {
+        if (child.isMesh) {
+          child.matrixAutoUpdate = false;
+          child.updateMatrix();
+        }
+      });
+      boardGroup.matrixAutoUpdate = false;
+      boardGroup.updateMatrixWorld(true);
     }
 
     buildChessBoardGrid();
@@ -1455,6 +1465,17 @@ export function initWizardChess() {
             // Initialize default Look 1/6 (Original Ashlar & Abbey Flagstone) on Wall/Column Stone and Floor Stone
             setWallStoneLook(0);
             setFloorStoneLook(0);
+
+            // Freeze matrix calculations on static cathedral architecture
+            cathedralRoot.traverse((child) => {
+              if (child.isMesh) {
+                child.matrixAutoUpdate = false;
+                child.updateMatrix();
+              }
+            });
+            cathedralRoot.matrixAutoUpdate = false;
+            cathedralRoot.updateMatrixWorld(true);
+
             scene.add(cathedralRoot);
 
             bumpProgress('Cathedral Architecture Loaded...');
@@ -1713,6 +1734,8 @@ export function initWizardChess() {
     }
 
     // Scripted Chess Notation & Step-Through Choreography State (Features 3a, 3b, 3c)
+    const activeMovingMeshes = new Set();
+    const activeMoveTweens = [];
     let scriptedGameActive = false;
     let scriptDeviated = false;
     let scriptMoves = [];
@@ -1766,10 +1789,10 @@ export function initWizardChess() {
       preMoveHighlightTask = null;
       activeMoveTweens.length = 0;
       clearCheckmateSequence();
-      for (const d of shatterDebris) {
-        if (d.mesh) scene.remove(d.mesh);
+      for (let i = 0; i < shardPool.length; i++) {
+        shardPool[i].active = false;
+        shardPool[i].mesh.visible = false;
       }
-      shatterDebris.length = 0;
       impactFlashLight.intensity = 0;
       impactFlashLight.visible = false;
       if (activeDuelSavedCam) {
@@ -1810,6 +1833,7 @@ export function initWizardChess() {
         }
       }
 
+      updateRaycastTargets();
       renderer.shadowMap.needsUpdate = true;
       updateTurnUI();
       if (typeof updateScriptBarUI === 'function') updateScriptBarUI();
@@ -1860,6 +1884,7 @@ export function initWizardChess() {
         setCameraForSide(viewSide, false);
       }
 
+      updateRaycastTargets();
       renderer.shadowMap.needsUpdate = true;
       updateTurnUI();
       if (typeof updateScriptBarUI === 'function') updateScriptBarUI();
@@ -2048,83 +2073,121 @@ export function initWizardChess() {
     }
 
     // =========================================================================
-    // Square Highlights
+    // Pre-allocated Pools for Highlights and Stone Shatter Debris (Zero GC & Zero Buffer Allocation)
     // =========================================================================
+    const pooledSelGeo = new THREE.RingGeometry(0.115, 0.155, 32);
+    pooledSelGeo.rotateX(-Math.PI / 2);
+    const pooledSelMat = new THREE.MeshBasicMaterial({ color: 0xf5d76e, side: THREE.DoubleSide });
+    const pooledSelMesh = new THREE.Mesh(pooledSelGeo, pooledSelMat);
+    pooledSelMesh.visible = false;
+    squareHighlightsGroup.add(pooledSelMesh);
+
+    const pooledCapGeo = new THREE.RingGeometry(0.12, 0.16, 32);
+    pooledCapGeo.rotateX(-Math.PI / 2);
+    const pooledCapMat = new THREE.MeshBasicMaterial({ color: 0xe63946, side: THREE.DoubleSide });
+    const pooledCapMeshes = [];
+    for (let i = 0; i < 28; i++) {
+      const capM = new THREE.Mesh(pooledCapGeo, pooledCapMat);
+      capM.visible = false;
+      squareHighlightsGroup.add(capM);
+      pooledCapMeshes.push(capM);
+    }
+
+    const pooledDotGeo = new THREE.CircleGeometry(0.06, 24);
+    pooledDotGeo.rotateX(-Math.PI / 2);
+    const pooledDotMat = new THREE.MeshBasicMaterial({
+      color: 0x4ea8de,
+      transparent: true,
+      opacity: 0.85,
+      side: THREE.DoubleSide
+    });
+    const pooledDotMeshes = [];
+    for (let i = 0; i < 28; i++) {
+      const dotM = new THREE.Mesh(pooledDotGeo, pooledDotMat);
+      dotM.visible = false;
+      squareHighlightsGroup.add(dotM);
+      pooledDotMeshes.push(dotM);
+    }
+
     function clearSquareHighlights() {
-      while (squareHighlightsGroup.children.length > 0) {
-        squareHighlightsGroup.remove(squareHighlightsGroup.children[0]);
-      }
+      pooledSelMesh.visible = false;
+      for (let i = 0; i < pooledCapMeshes.length; i++) pooledCapMeshes[i].visible = false;
+      for (let i = 0; i < pooledDotMeshes.length; i++) pooledDotMeshes[i].visible = false;
     }
 
     function showSquareHighlights(r, c, moves) {
       clearSquareHighlights();
-      const selGeo = new THREE.RingGeometry(0.115, 0.155, 32);
-      selGeo.rotateX(-Math.PI / 2);
-      const selMat = new THREE.MeshBasicMaterial({ color: 0xf5d76e, side: THREE.DoubleSide });
-      const selMesh = new THREE.Mesh(selGeo, selMat);
       const selPos = boardToWorld(r, c);
-      selMesh.position.set(selPos.x, BOARD_SURFACE_Y + 0.01, selPos.z);
-      squareHighlightsGroup.add(selMesh);
+      pooledSelMesh.position.set(selPos.x, BOARD_SURFACE_Y + 0.01, selPos.z);
+      pooledSelMesh.visible = true;
 
+      let capIdx = 0;
+      let dotIdx = 0;
       for (const m of moves) {
         const pos = boardToWorld(m.r, m.c);
         if (m.capture) {
-          const capGeo = new THREE.RingGeometry(0.12, 0.16, 32);
-          capGeo.rotateX(-Math.PI / 2);
-          const capMat = new THREE.MeshBasicMaterial({ color: 0xe63946, side: THREE.DoubleSide });
-          const capMesh = new THREE.Mesh(capGeo, capMat);
-          capMesh.position.set(pos.x, BOARD_SURFACE_Y + 0.012, pos.z);
-          squareHighlightsGroup.add(capMesh);
+          if (capIdx < pooledCapMeshes.length) {
+            const capMesh = pooledCapMeshes[capIdx++];
+            capMesh.position.set(pos.x, BOARD_SURFACE_Y + 0.012, pos.z);
+            capMesh.visible = true;
+          }
         } else {
-          const dotGeo = new THREE.CircleGeometry(0.06, 24);
-          dotGeo.rotateX(-Math.PI / 2);
-          const dotMat = new THREE.MeshBasicMaterial({
-            color: 0x4ea8de,
-            transparent: true,
-            opacity: 0.85,
-            side: THREE.DoubleSide
-          });
-          const dotMesh = new THREE.Mesh(dotGeo, dotMat);
-          dotMesh.position.set(pos.x, BOARD_SURFACE_Y + 0.01, pos.z);
-          squareHighlightsGroup.add(dotMesh);
+          if (dotIdx < pooledDotMeshes.length) {
+            const dotMesh = pooledDotMeshes[dotIdx++];
+            dotMesh.position.set(pos.x, BOARD_SURFACE_Y + 0.01, pos.z);
+            dotMesh.visible = true;
+          }
         }
       }
     }
 
-    // =========================================================================
-    // Stone Shatter Debris Physics (Shared VBO to avoid mid-attack GPU buffer allocation)
-    // =========================================================================
+    // Pre-allocated object pool for stone shatter debris (reusable meshes and vectors)
     const sharedShardGeo = new THREE.DodecahedronGeometry(1, 0);
+    const MAX_SHATTER_SHARDS = 36;
+    const shardPool = [];
+    for (let i = 0; i < MAX_SHATTER_SHARDS; i++) {
+      const frag = new THREE.Mesh(sharedShardGeo, whitePieceMat);
+      frag.castShadow = false;
+      frag.visible = false;
+      scene.add(frag);
+      shardPool.push({
+        mesh: frag,
+        baseScale: 0.035,
+        vel: new THREE.Vector3(),
+        rotVel: new THREE.Vector3(),
+        life: 0,
+        active: false
+      });
+    }
 
     function spawnStoneShatter(worldPos, color) {
       soundEngine.playStoneShatterSound();
       const mat = color === 'w' ? whitePieceMat : blackPieceMat;
-      for (let i = 0; i < 32; i++) {
+      const count = Math.min(32, shardPool.length);
+      for (let i = 0; i < count; i++) {
+        const shard = shardPool[i];
+        shard.mesh.material = mat;
         const sz = 0.024 + Math.random() * 0.048;
-        const frag = new THREE.Mesh(sharedShardGeo, mat);
-        frag.scale.setScalar(sz);
-        frag.position.set(
+        shard.baseScale = sz;
+        shard.mesh.scale.setScalar(sz);
+        shard.mesh.position.set(
           worldPos.x + (Math.random() - 0.5) * 0.16,
           worldPos.y + 0.10 + Math.random() * 0.28,
           worldPos.z + (Math.random() - 0.5) * 0.16
         );
-        frag.castShadow = false;
-        scene.add(frag);
-        shatterDebris.push({
-          mesh: frag,
-          baseScale: sz,
-          vel: new THREE.Vector3(
-            (Math.random() - 0.5) * 2.2,
-            1.2 + Math.random() * 2.0,
-            (Math.random() - 0.5) * 2.2
-          ),
-          rotVel: new THREE.Vector3(
-            Math.random() * 9,
-            Math.random() * 9,
-            Math.random() * 9
-          ),
-          life: 2.2
-        });
+        shard.vel.set(
+          (Math.random() - 0.5) * 2.2,
+          1.2 + Math.random() * 2.0,
+          (Math.random() - 0.5) * 2.2
+        );
+        shard.rotVel.set(
+          Math.random() * 9,
+          Math.random() * 9,
+          Math.random() * 9
+        );
+        shard.life = 2.2;
+        shard.active = true;
+        shard.mesh.visible = true;
       }
       impactFlashLight.position.set(worldPos.x, worldPos.y + 0.4, worldPos.z);
       impactFlashLight.intensity = 7.5;
@@ -2143,6 +2206,20 @@ export function initWizardChess() {
     };
     const MIN_PIECE_SEP = 0.318; // Stone pedestal diameter is ~0.29m; 0.318m enforces a solid concrete gap
     const MELEE_STANDOFF = 0.36; // Optimal melee standoff (1.06 squares) so sword blades visibly bridge the gap and cleave into defender before burst
+
+    // Pre-allocated reusable vectors for duel camera choreography (zero GC during combat)
+    const _duelMidPoint = new THREE.Vector3();
+    const _duelPerpA = new THREE.Vector3();
+    const _duelPerpB = new THREE.Vector3();
+    const _duelCamFromMid = new THREE.Vector3();
+    const _duelCamMid = new THREE.Vector3();
+    const _duelCamClose = new THREE.Vector3();
+    const _duelTargetStart = new THREE.Vector3();
+    const _duelTargetEnd = new THREE.Vector3();
+    const _duelProbes = [
+      { perpMul: 1.24, dirMul: -0.34 },
+      { perpMul: 0.92, dirMul: 0.14 }
+    ];
 
     // =========================================================================
     // Smooth Attack Camera & Move Execution Choreography
@@ -2252,6 +2329,11 @@ export function initWizardChess() {
         playPieceClip(castleRook, 'Move', true, 0.10);
       }
 
+      activeMovingMeshes.clear();
+      if (piece && piece.mesh) activeMovingMeshes.add(piece.mesh);
+      if (castleRook && castleRook.mesh) activeMovingMeshes.add(castleRook.mesh);
+      if (captured && captured.mesh) activeMovingMeshes.add(captured.mesh);
+
       // Defending enemy statue turns to face the incoming attacker shield-to-shield
       if (isCapture && captured && captured.mesh) {
         captured.mesh.rotation.y = Math.atan2(-dx, -dz);
@@ -2320,7 +2402,10 @@ export function initWizardChess() {
 
       function resetBystandersToHome() {
         for (const b of bystanders) {
-          b.piece.mesh.position.copy(b.homePos);
+          if (b.isDisplaced) {
+            b.piece.mesh.position.copy(b.homePos);
+            b.isDisplaced = false;
+          }
         }
       }
 
@@ -2359,11 +2444,24 @@ export function initWizardChess() {
           const hz = b.homePos.z;
           const dHomeX = bx - hx;
           const dHomeZ = bz - hz;
+
+          // Quick 2D AABB bounding check: distant pieces are completely skipped, keeping their matrices untouched on CPU
+          if (Math.abs(dHomeX) > 0.65 || Math.abs(dHomeZ) > 0.65) {
+            if (b.isDisplaced) {
+              b.piece.mesh.position.copy(b.homePos);
+              b.isDisplaced = false;
+            }
+            continue;
+          }
+
           const dHome = Math.hypot(dHomeX, dHomeZ);
 
           // If the moving piece is already vertically above this bystander's top + 2.5cm margin, no horizontal push needed
           if (by >= BOARD_SURFACE_Y + b.height + 0.025) {
-            b.piece.mesh.position.copy(b.homePos);
+            if (b.isDisplaced) {
+              b.piece.mesh.position.copy(b.homePos);
+              b.isDisplaced = false;
+            }
             continue;
           }
 
@@ -2376,8 +2474,10 @@ export function initWizardChess() {
               BOARD_SURFACE_Y,
               hz - (dHomeZ / dHome) * yieldDist
             );
-          } else {
+            b.isDisplaced = true;
+          } else if (b.isDisplaced) {
             b.piece.mesh.position.copy(b.homePos);
+            b.isDisplaced = false;
           }
 
           // Hard concrete cylinder separation against bystander's instantaneous position
@@ -2410,26 +2510,22 @@ export function initWizardChess() {
       const savedTarget = orbitControls.target.clone();
 
       // Calculate Optimal Unobstructed 3/4 Duel Camera Angle
-      const midPoint = new THREE.Vector3(
+      const midPoint = _duelMidPoint.set(
         (strikePos.x + endPos.x) * 0.5,
         BOARD_SURFACE_Y + 0.32,
         (strikePos.z + endPos.z) * 0.5
       );
 
       // Score both perpendicular sides for foreground bystander occlusion across both mid and close camera poses
-      const perpA = new THREE.Vector3(-dirZ, 0, dirX);
-      const perpB = new THREE.Vector3(dirZ, 0, -dirX);
-      const camFromMid = new THREE.Vector3().subVectors(savedCamPos, midPoint);
+      const perpA = _duelPerpA.set(-dirZ, 0, dirX);
+      const perpB = _duelPerpB.set(dirZ, 0, -dirX);
+      const camFromMid = _duelCamFromMid.subVectors(savedCamPos, midPoint);
       const prefPerp = camFromMid.dot(perpA) >= 0 ? perpA : perpB;
       const altPerp = prefPerp === perpA ? perpB : perpA;
 
       function scoreDuelPerpOcclusion(perpVec) {
         let penalty = 0;
-        const probes = [
-          { perpMul: 1.24, dirMul: -0.34 },
-          { perpMul: 0.92, dirMul: 0.14 }
-        ];
-        for (const pr of probes) {
+        for (const pr of _duelProbes) {
           const camX = midPoint.x + perpVec.x * pr.perpMul + dirX * pr.dirMul;
           const camZ = midPoint.z + perpVec.z * pr.perpMul + dirZ * pr.dirMul;
           const rayX = midPoint.x - camX;
@@ -2459,22 +2555,22 @@ export function initWizardChess() {
 
       // Continuous Quadratic Bezier 3/4 orbit-and-dolly arc (savedCamPos -> duelCamMid -> duelCamClose)
       // so the attack camera glides in a single unbroken C-infinity sweep across approach + strike without ever stalling at tApproach
-      const duelCamMid = new THREE.Vector3(
+      const duelCamMid = _duelCamMid.set(
         midPoint.x + chosenPerp.x * 1.34 - dirX * 0.44,
         BOARD_SURFACE_Y + 0.96,
         midPoint.z + chosenPerp.z * 1.34 - dirZ * 0.44
       );
-      const duelCamClose = new THREE.Vector3(
+      const duelCamClose = _duelCamClose.set(
         midPoint.x + chosenPerp.x * 0.92 + dirX * 0.18,
         BOARD_SURFACE_Y + 0.74,
         midPoint.z + chosenPerp.z * 0.92 + dirZ * 0.18
       );
-      const duelTargetStart = new THREE.Vector3(
+      const duelTargetStart = _duelTargetStart.set(
         strikePos.x + dirX * 0.10,
         BOARD_SURFACE_Y + 0.34,
         strikePos.z + dirZ * 0.10
       );
-      const duelTargetEnd = new THREE.Vector3(
+      const duelTargetEnd = _duelTargetEnd.set(
         endPos.x - dirX * 0.05,
         BOARD_SURFACE_Y + 0.30,
         endPos.z - dirZ * 0.05
@@ -2596,8 +2692,10 @@ export function initWizardChess() {
           orbitControls.update();
         }
 
+        activeMovingMeshes.clear();
         currentTurn = currentTurn === 'w' ? 'b' : 'w';
         isAnimatingMove = false;
+        updateRaycastTargets();
         updateTurnUI();
         maybeScheduleAIMove();
       }
@@ -2662,6 +2760,13 @@ export function initWizardChess() {
             for (const b of bystanders) {
               const dxB = strikePos.x - b.homePos.x;
               const dzB = strikePos.z - b.homePos.z;
+              if (Math.abs(dxB) > 0.50 || Math.abs(dzB) > 0.50) {
+                if (b.isDisplaced) {
+                  b.piece.mesh.position.copy(b.homePos);
+                  b.isDisplaced = false;
+                }
+                continue;
+              }
               const dB = Math.hypot(dxB, dzB);
               if (dB < 0.42 && dB > 0.001) {
                 const yieldDist = ((0.42 - dB) / 0.42) * 0.068;
@@ -2670,8 +2775,10 @@ export function initWizardChess() {
                   BOARD_SURFACE_Y,
                   b.homePos.z - (dzB / dB) * yieldDist
                 );
-              } else {
+                b.isDisplaced = true;
+              } else if (b.isDisplaced) {
                 b.piece.mesh.position.copy(b.homePos);
+                b.isDisplaced = false;
               }
             }
 
@@ -2745,6 +2852,12 @@ export function initWizardChess() {
               if (captured && captured.mesh) {
                 const shatterOrigin = captured.mesh.position.clone();
                 scene.remove(captured.mesh);
+                if (captured.mixer) {
+                  const mIdx = activeMixers.indexOf(captured.mixer);
+                  if (mIdx !== -1) activeMixers.splice(mIdx, 1);
+                  captured.mixer.stopAllAction();
+                  captured.mixer.uncacheRoot(captured.mesh);
+                }
                 spawnStoneShatter(shatterOrigin, captured.color);
               }
             }
@@ -2820,7 +2933,6 @@ export function initWizardChess() {
       return true;
     }
 
-    const activeMoveTweens = [];
 
     // =========================================================================
     // Single-Player Tactical AI (Auto-Plays Opponent Turn + Manual AI Button)
@@ -3807,6 +3919,20 @@ export function initWizardChess() {
     const raycaster = new THREE.Raycaster();
     const pointer = new THREE.Vector2();
     let pointerDownPos = { x: 0, y: 0 };
+    const raycastTargets = [];
+
+    function updateRaycastTargets() {
+      raycastTargets.length = 0;
+      for (let r = 0; r < 8; r++) {
+        for (let c = 0; c < 8; c++) {
+          const pc = boardState[r][c];
+          if (pc && pc.mesh) raycastTargets.push(pc.mesh);
+        }
+      }
+      for (let i = 0; i < boardSquareMeshes.length; i++) {
+        raycastTargets.push(boardSquareMeshes[i]);
+      }
+    }
 
     renderer.domElement.addEventListener('pointerdown', (e) => {
       pointerDownPos = { x: e.clientX, y: e.clientY };
@@ -3827,16 +3953,8 @@ export function initWizardChess() {
 
       raycaster.setFromCamera(pointer, camera);
 
-      const pieceMeshes = [];
-      for (let r = 0; r < 8; r++) {
-        for (let c = 0; c < 8; c++) {
-          if (boardState[r][c] && boardState[r][c].mesh) {
-            pieceMeshes.push(boardState[r][c].mesh);
-          }
-        }
-      }
-
-      const hits = raycaster.intersectObjects([...pieceMeshes, ...boardSquareMeshes], true);
+      if (raycastTargets.length === 0) updateRaycastTargets();
+      const hits = raycaster.intersectObjects(raycastTargets, true);
       if (hits.length === 0) {
         if (preMoveHighlightTask) preMoveHighlightTask = null;
         clearSquareHighlights();
@@ -4556,6 +4674,22 @@ export function initWizardChess() {
         renderer.render(scene, camera);
         return path;
       },
+      startOnlineGame: (code, color) => {
+        stopMultiplayerSync();
+        scriptedGameActive = false;
+        gameMode = 'multi';
+        playerColor = color === 'b' ? 'b' : 'w';
+        roomCode = code;
+        appliedMoveSeq = 0;
+        resetChessBoard(true);
+        startMultiplayerSync(code);
+      },
+      stopOnlineGame: () => {
+        stopMultiplayerSync();
+        gameMode = 'single';
+        roomCode = null;
+        resetChessBoard(true);
+      },
       setSinglePlayerSide: (color) => {
         stopMultiplayerSync();
         scriptedGameActive = false;
@@ -4619,7 +4753,7 @@ export function initWizardChess() {
         preMoveHighlightActive: Boolean(preMoveHighlightTask),
         selectedSquare,
         validMovesCount: validMoves.length,
-        highlightMeshCount: squareHighlightsGroup.children.length,
+        highlightMeshCount: squareHighlightsGroup.children.filter((c) => c.visible).length,
         uiHidden: document.body.classList.contains('cinematic-ui-hidden'),
         playerColor,
         currentTurn,
@@ -4938,9 +5072,12 @@ export function initWizardChess() {
           flushOrbitControlsDamping();
         }
       } else if (orbitControls.enabled && !isAnimatingMove) {
-        orbitControls.update();
-        enforceCathedralBoundsAndSolidColumns(_stepScenePrevCamPos, camera.position, orbitControls.target);
-        camera.lookAt(orbitControls.target);
+        const controlsChanged = orbitControls.update();
+        const camMoved = camera.position.distanceToSquared(_stepScenePrevCamPos) > 1e-6;
+        if (controlsChanged || camMoved) {
+          enforceCathedralBoundsAndSolidColumns(_stepScenePrevCamPos, camera.position, orbitControls.target);
+          camera.lookAt(orbitControls.target);
+        }
       } else if (isAnimatingMove) {
         enforceCathedralBoundsAndSolidColumns(_stepScenePrevCamPos, camera.position, orbitControls.target);
         camera.lookAt(orbitControls.target);
@@ -4950,12 +5087,13 @@ export function initWizardChess() {
         impactFlashLight.intensity = Math.max(0, impactFlashLight.intensity - dt * 28);
       }
 
-      for (let i = shatterDebris.length - 1; i >= 0; i--) {
-        const d = shatterDebris[i];
+      for (let i = 0; i < shardPool.length; i++) {
+        const d = shardPool[i];
+        if (!d.active) continue;
         d.life -= dt;
         if (d.life <= 0) {
-          scene.remove(d.mesh);
-          shatterDebris.splice(i, 1);
+          d.active = false;
+          d.mesh.visible = false;
           continue;
         }
         d.vel.y -= 9.8 * dt;
@@ -5044,9 +5182,6 @@ export function initWizardChess() {
       manualStepMode = Boolean(v);
     };
 
-    let rollingDts = [];
-    let autoStabilized = false;
-
     function animate() {
       if (!navigator.webdriver && !manualStepMode) {
         requestAnimationFrame(animate);
@@ -5054,19 +5189,6 @@ export function initWizardChess() {
       if (manualStepMode) return;
       const rawDt = clock.getDelta();
       const dt = Math.min(rawDt, 0.1);
-
-      // Adaptive FPS stabilizer: if running slow, auto-switch to fast mode for seamless 60 FPS
-      if (!autoStabilized && currentGraphicsQuality === 'smooth' && !navigator.webdriver) {
-        rollingDts.push(rawDt);
-        if (rollingDts.length > 30) {
-          rollingDts.shift();
-          const avgDt = rollingDts.reduce((a, b) => a + b, 0) / rollingDts.length;
-          if (avgDt > 0.028) { // below ~35 FPS
-            autoStabilized = true;
-            setGraphicsQuality('fast');
-          }
-        }
-      }
 
       stepScene(dt || 0.016, true);
     }
@@ -5091,6 +5213,12 @@ export function initWizardChess() {
       resetChessBoard(true, true);
       updateGraphicsToggleUI();
       updateSoundToggleUI();
+
+      // Pre-warm and compile all PBR shaders, stone realism GLSL, and shadow passes
+      // so initial moves and combat run smoothly without frame stutter
+      renderer.compile(scene, camera);
+      renderer.render(scene, camera);
+
       if (navigator.webdriver) {
         window.wizardChess.stepBy(0.9, 15);
       } else {

@@ -129,6 +129,14 @@ export default function App() {
           <div className="mobile-sheet-section-label">Game Actions</div>
 
           <button
+            className="hud-btn highlight-btn"
+            id="btn-lobby"
+            title="Open Online Multiplayer, Dual Pass-and-Play, and Director Script Choreography Lobby"
+            onClick={() => setMobileSheetOpen(false)}
+          >
+            🌐 Online &amp; Dual Lobby
+          </button>
+          <button
             className="hud-btn"
             id="btn-side-toggle"
             title="Switch between Playing as White and Playing as Black"
@@ -246,6 +254,181 @@ export default function App() {
             <button className="checkmate-btn secondary" id="btn-checkmate-dismiss">
               Dismiss
             </button>
+          </div>
+        </div>
+      </div>
+
+      <div id="lobby-modal" className="modal-backdrop">
+        <div className="modal-card">
+          <div className="modal-header">
+            <h2 className="modal-title">🏰 Wizard Chess Sanctum Lobby</h2>
+            <button
+              type="button"
+              className="modal-close"
+              id="btn-close-lobby"
+              onClick={() => {
+                const win = window as unknown as { wizardChess?: { closeLobbyModal?: () => void } };
+                win.wizardChess?.closeLobbyModal?.();
+              }}
+            >
+              ✕
+            </button>
+          </div>
+          <div className="modal-tabs">
+            <button type="button" className="modal-tab active" id="tab-single">
+              Single vs AI
+            </button>
+            <button type="button" className="modal-tab" id="tab-multi">
+              🌐 Online &amp; Dual
+            </button>
+            <button type="button" className="modal-tab" id="tab-script">
+              📜 Director Script
+            </button>
+          </div>
+          <div className="modal-body">
+            {/* Single Player Panel */}
+            <div id="panel-single" className="modal-panel">
+              <div className="modal-section-title">Select Your Side</div>
+              <div className="color-picker-grid">
+                <button type="button" className="color-pick-btn selected" id="pick-sp-white">
+                  ♔ White (Play First)
+                </button>
+                <button type="button" className="color-pick-btn" id="pick-sp-black">
+                  ♚ Black (AI Plays First)
+                </button>
+              </div>
+              <button type="button" className="modal-primary-btn" id="btn-start-single">
+                Start Single Player Game
+              </button>
+            </div>
+
+            {/* Multiplayer Panel */}
+            <div id="panel-multi" className="modal-panel" style={{ display: 'none' }}>
+              <div className="modal-section-title">Create Online Room</div>
+              <div className="color-picker-grid">
+                <button type="button" className="color-pick-btn selected" id="pick-mp-white">
+                  White
+                </button>
+                <button type="button" className="color-pick-btn" id="pick-mp-black">
+                  Black
+                </button>
+              </div>
+              <button type="button" className="modal-primary-btn" id="btn-create-room">
+                Create Multiplayer Room
+              </button>
+
+              <div
+                id="room-created-panel"
+                style={{
+                  display: 'none',
+                  marginTop: '14px',
+                  padding: '12px',
+                  background: 'rgba(212,175,55,0.08)',
+                  borderRadius: '8px',
+                  border: '1px solid rgba(212,175,55,0.3)'
+                }}
+              >
+                <div style={{ fontSize: '0.82rem', color: '#f0ece1', marginBottom: '6px' }}>
+                  Room Code:{' '}
+                  <strong id="modal-room-code" style={{ color: '#f5d76e', fontSize: '1.1rem' }}>
+                    ----
+                  </strong>
+                </div>
+                <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
+                  <button type="button" className="modal-secondary-btn" id="btn-copy-code">
+                    Copy Code
+                  </button>
+                  <button type="button" className="modal-secondary-btn" id="btn-copy-link">
+                    Copy Invite Link
+                  </button>
+                  <button
+                    type="button"
+                    className="modal-primary-btn"
+                    id="btn-enter-created-room"
+                    style={{ flex: 1, margin: 0, padding: '6px 12px' }}
+                  >
+                    Enter Room
+                  </button>
+                </div>
+              </div>
+
+              <div
+                className="modal-divider"
+                style={{ margin: '16px 0', borderTop: '1px solid rgba(212,175,55,0.2)' }}
+              ></div>
+
+              <div className="modal-section-title">Join Existing Room</div>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <input
+                  type="text"
+                  id="input-room-code"
+                  placeholder="Enter 4-Char Code (e.g. A4K9)"
+                  maxLength={6}
+                  style={{
+                    flex: 1,
+                    background: '#0a0d14',
+                    border: '1px solid rgba(212,175,55,0.4)',
+                    borderRadius: '6px',
+                    color: '#f0ece1',
+                    padding: '8px 12px',
+                    fontSize: '0.95rem',
+                    textTransform: 'uppercase'
+                  }}
+                />
+                <button
+                  type="button"
+                  className="modal-primary-btn"
+                  id="btn-join-room"
+                  style={{ margin: 0, padding: '8px 16px' }}
+                >
+                  Join Room
+                </button>
+              </div>
+              <div
+                id="mp-status-msg"
+                style={{ fontSize: '0.8rem', color: '#d4af37', marginTop: '10px', textAlign: 'center' }}
+              ></div>
+            </div>
+
+            {/* Script Choreography Panel */}
+            <div id="panel-script" className="modal-panel" style={{ display: 'none' }}>
+              <div className="modal-section-title">Historic PGN / SAN Notation Script</div>
+              <textarea
+                id="input-notation"
+                rows={4}
+                placeholder="1. e4 e5 2. Nf3 Nc6 3. Bc4 Bc5..."
+                style={{
+                  width: '100%',
+                  background: '#0a0d14',
+                  border: '1px solid rgba(212,175,55,0.4)',
+                  borderRadius: '6px',
+                  color: '#f0ece1',
+                  padding: '8px 12px',
+                  fontSize: '0.85rem',
+                  fontFamily: 'monospace',
+                  resize: 'vertical'
+                }}
+              ></textarea>
+              <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
+                <button type="button" className="modal-secondary-btn" id="btn-preset-scandi">
+                  Scand. Defense
+                </button>
+                <button type="button" className="modal-secondary-btn" id="btn-preset-italian">
+                  Italian Game
+                </button>
+                <button type="button" className="modal-secondary-btn" id="btn-preset-scholar">
+                  Scholar's Mate
+                </button>
+              </div>
+              <button type="button" className="modal-primary-btn" id="btn-load-notation" style={{ marginTop: '12px' }}>
+                Load &amp; Step Script
+              </button>
+              <div
+                script-status-msg=""
+                id="script-status-msg"
+                style={{ fontSize: '0.8rem', color: '#d4af37', marginTop: '10px', textAlign: 'center' }}
+              ></div>
+            </div>
           </div>
         </div>
       </div>

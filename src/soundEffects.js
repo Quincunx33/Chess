@@ -145,13 +145,15 @@ class WizardSoundEngine {
   // Helper to generate a procedural noise buffer (stone scrape / crumble)
   createNoiseBuffer(duration = 0.5) {
     if (!this.ctx) return null;
+    if (this._cachedNoiseBuffer) return this._cachedNoiseBuffer;
     const sampleRate = this.ctx.sampleRate || 44100;
-    const bufferSize = Math.max(1, Math.floor(sampleRate * duration));
+    const bufferSize = sampleRate * 2;
     const buffer = this.ctx.createBuffer(1, bufferSize, sampleRate);
     const data = buffer.getChannelData(0);
     for (let i = 0; i < bufferSize; i++) {
       data[i] = Math.random() * 2 - 1;
     }
+    this._cachedNoiseBuffer = buffer;
     return buffer;
   }
 
