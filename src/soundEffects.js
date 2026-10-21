@@ -8,14 +8,19 @@ class WizardSoundEngine {
     this.ctx = null;
     this.masterGain = null;
     this.isMuted = false;
+    this.volume = 0.85;
     this.isUnlocked = false;
 
-    // Load initial mute state from localStorage if available
+    // Load initial mute and volume state from localStorage if available
     try {
       if (typeof window !== 'undefined' && window.localStorage) {
-        const saved = window.localStorage.getItem('wizard_chess_muted');
-        if (saved === 'true') {
+        const savedMute = window.localStorage.getItem('wizard_chess_muted');
+        if (savedMute === 'true') {
           this.isMuted = true;
+        }
+        const savedVol = window.localStorage.getItem('wizard_chess_volume');
+        if (savedVol !== null && !isNaN(Number(savedVol))) {
+          this.volume = Math.max(0, Math.min(1, Number(savedVol)));
         }
       }
     } catch (e) {}
@@ -46,7 +51,8 @@ class WizardSoundEngine {
     try {
       this.ctx = new AudioContextClass();
       this.masterGain = this.ctx.createGain();
-      this.masterGain.gain.setValueAtTime(this.isMuted ? 0 : 0.85, this.ctx.currentTime);
+      const currentGain = this.isMuted ? 0 : this.volume;
+      this.masterGain.gain.setValueAtTime(currentGain, this.ctx.currentTime);
       this.masterGain.connect(this.ctx.destination);
     } catch (err) {
       console.warn('Could not initialize AudioContext:', err);
@@ -133,9 +139,97 @@ class WizardSoundEngine {
     if (this.masterGain && this.ctx) {
       const t = this.ctx.currentTime || 0;
       this.masterGain.gain.cancelScheduledValues(t);
-      this.masterGain.gain.linearRampToValueAtTime(this.isMuted ? 0 : 0.85, t + 0.05);
+      const targetGain = this.isMuted ? 0 : this.volume;
+      this.masterGain.gain.linearRampToValueAtTime(targetGain, t + 0.05);
     }
     return !this.isMuted;
+  }
+
+  setVolume(level) {
+    this.unlockAudio();
+    const clamped = Math.max(0, Math.min(1, Number(level) || 0));
+    this.volume = clamped;
+    if (this.volume > 0 && this.isMuted) {
+      this.isMuted = false;
+    }
+    try {
+      if (typeof window !== 'undefined' && window.localStorage) {
+        window.localStorage.setItem('wizard_chess_volume', String(this.volume));
+        window.localStorage.setItem('wizard_chess_muted', String(this.isMuted));
+      }
+    } catch (e) {}
+
+    if (this.masterGain && this.ctx) {
+      const t = this.ctx.currentTime || 0;
+      this.masterGain.gain.cancelScheduledValues(t);
+      this.masterGain.gain.linearRampToValueAtTime(this.isMuted ? 0 : this.volume, t + 0.05);
+    }
+    return this.volume;
+  }
+
+  getVolume() {
+    return this.volume;
+  }
+
+  // Incoming Chat Notification Sound: Magical crystal double chime
+  playChatNotificationSound() {
+    if (this.isMuted || this.volume <= 0) return;
+    this.unlockAudio();
+    if (!this.ctx || this.ctx.state === 'closed') return;
+
+    const t = this.ctx.currentTime || 0;
+    const osc1 = this.ctx.createOscillator();
+    const osc2 = this.ctx.createOscillator();
+    const gainNode = this.ctx.createGain();
+
+    osc1.type = 'triangle';
+    osc1.frequency.setValueAtTime(587.33, t); // D5
+    osc1.frequency.exponentialRampToValueAtTime(880, t + 0.12); // A5
+
+    osc2.type = 'sine';
+    osc2.frequency.setValueAtTime(880, t + 0.08); // A5
+    osc2.frequency.exponentialRampToValueAtTime(1174.66, t + 0.28); // D6
+
+    gainNode.gain.setValueAtTime(0.001, t);
+    gainNode.gain.linearRampToValueAtTime(0.22 * this.volume, t + 0.03);
+    gainNode.gain.exponentialRampToValueAtTime(0.001, t + 0.35);
+
+    osc1.connect(gainNode);
+    osc2.connect(gainNode);
+    gainNode.connect(this.masterGain);
+
+    osc1.start(t);
+    osc1.stop(t + 0.16);
+    osc2.start(t + 0.08);
+    osc2.stop(t + 0.35);
+  }
+
+  // Matchmaking Found Sound: Resonant golden gong / royal sanctum chime
+  playMatchFoundSound() {
+    if (this.isMuted || this.volume <= 0) return;
+    this.unlockAudio();
+    if (!this.ctx || this.ctx.state === 'closed') return;
+
+    const t = this.ctx.currentTime || 0;
+    const notes = [440, 554.37, 659.25, 880]; // A major chord
+    notes.forEach((freq, idx) => {
+      const osc = this.ctx.createOscillator();
+      const g = this.ctx.createGain();
+      const noteStart = t + idx * 0.06;
+
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(freq, noteStart);
+
+      g.gain.setValueAtTime(0.001, noteStart);
+      g.gain.linearRampToValueAtTime(0.2 * this.volume, noteStart + 0.04);
+      g.gain.exponentialRampToValueAtTime(0.001, noteStart + 0.8);
+
+      osc.connect(g);
+      g.connect(this.masterGain);
+
+      osc.start(noteStart);
+      osc.stop(noteStart + 0.85);
+    });
   }
 
   getSoundEnabled() {

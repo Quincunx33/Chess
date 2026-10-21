@@ -3,6 +3,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { clone as cloneSkeleton } from 'three/examples/jsm/utils/SkeletonUtils.js';
 import { soundEngine } from './soundEffects.js';
+import { onlineManager } from './onlineClient';
 
 /** @type {any} */
 const THREE = THREE_NS;
@@ -56,10 +57,9 @@ export function initWizardChess() {
 
     function getTargetPixelRatio(quality) {
       const dpr = window.devicePixelRatio || 1;
-      if (quality === 'fast') return Math.min(dpr, 1.0);
+      if (quality === 'fast') return 1.0;
       if (quality === 'ultra') return Math.min(dpr, 2.0);
-      // 'smooth' maintains high-fidelity native sharpness
-      return Math.min(dpr, 1.5);
+      return Math.min(dpr, 1.35);
     }
 
     renderer.setPixelRatio(getTargetPixelRatio(currentGraphicsQuality));
@@ -244,67 +244,6 @@ export function initWizardChess() {
     keyLight.shadow.normalBias = 0.02;
     scene.add(keyLight);
 
-    function updateGraphicsToggleUI() {
-      const btn = document.getElementById('btn-graphics-toggle');
-      if (!btn) return;
-      if (currentGraphicsQuality === 'fast') {
-        btn.textContent = '⚡ Graphics: Fast';
-        btn.title = 'Fast Mode (Low fill-rate, locked 60 FPS) — Click to cycle';
-      } else if (currentGraphicsQuality === 'ultra') {
-        btn.textContent = '💎 Graphics: Ultra';
-        btn.title = 'Ultra Mode (Cinematic resolution) — Click to cycle';
-      } else {
-        btn.textContent = '✨ Graphics: Smooth';
-        btn.title = 'Smooth Mode (Optimized 60 FPS) — Click to cycle';
-      }
-    }
-
-    function updateSoundToggleUI() {
-      const btn = document.getElementById('btn-sound-toggle');
-      if (!btn) return;
-      const on = soundEngine.getSoundEnabled();
-      btn.textContent = on ? '🔊 Sound: On' : '🔇 Sound: Muted';
-      btn.title = on
-        ? 'Sound Effects Enabled (Click to Mute)'
-        : 'Sound Muted (Click to Unmute / Unlock iOS Audio)';
-      btn.classList.toggle('active', on);
-    }
-
-    function setGraphicsQuality(quality) {
-      if (!['fast', 'smooth', 'ultra'].includes(quality)) quality = 'smooth';
-      currentGraphicsQuality = quality;
-      const targetDpr = getTargetPixelRatio(quality);
-      renderer.setPixelRatio(targetDpr);
-      renderer.setSize(window.innerWidth, window.innerHeight);
-
-      if (quality === 'fast') {
-        keyLight.shadow.mapSize.width = 512;
-        keyLight.shadow.mapSize.height = 512;
-        renderer.shadowMap.type = THREE.BasicShadowMap;
-      } else if (quality === 'ultra') {
-        keyLight.shadow.mapSize.width = 2048;
-        keyLight.shadow.mapSize.height = 2048;
-        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-      } else {
-        keyLight.shadow.mapSize.width = 1024;
-        keyLight.shadow.mapSize.height = 1024;
-        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-      }
-      if (keyLight.shadow.map) {
-        keyLight.shadow.map.dispose();
-        keyLight.shadow.map = null;
-      }
-      renderer.shadowMap.needsUpdate = true;
-      updateGraphicsToggleUI();
-      return quality;
-    }
-
-    function cycleGraphicsQuality() {
-      const order = ['smooth', 'fast', 'ultra'];
-      const nextIdx = (order.indexOf(currentGraphicsQuality) + 1) % order.length;
-      return setGraphicsQuality(order[nextIdx]);
-    }
-
     // Subtle directional rim/fill (kept low so opposing directional lights never cancel normal-map mortar shadows)
     const rimLight = new THREE.DirectionalLight(0xd8cbb8, 0.72);
     rimLight.position.set(-4.5, 6.0, -6.5);
@@ -326,6 +265,148 @@ export function initWizardChess() {
       pLight.userData.baseIntensity = cfg.baseIntensity;
       scene.add(pLight);
       brazierLights.push(pLight);
+    }
+
+    function updateGraphicsToggleUI() {
+      const btn = document.getElementById('btn-graphics-toggle');
+      if (!btn) return;
+      if (currentGraphicsQuality === 'fast') {
+        btn.textContent = '⚡ Graphics: Fast (Max FPS)';
+        btn.title = 'Fast Mode (Low fill-rate, locked 60+ FPS, zero shadows) — Click to cycle';
+      } else if (currentGraphicsQuality === 'ultra') {
+        btn.textContent = '💎 Graphics: Ultra (Cinematic)';
+        btn.title = 'Ultra Mode (2K soft shadows, max reflections, 16x textures) — Click to cycle';
+      } else {
+        btn.textContent = '✨ Graphics: Smooth (60 FPS)';
+        btn.title = 'Smooth Mode (Balanced 60 FPS, soft shadows, 4x textures) — Click to cycle';
+      }
+    }
+
+    function updateSoundToggleUI() {
+      const btn = document.getElementById('btn-sound-toggle');
+      if (!btn) return;
+      const on = soundEngine.getSoundEnabled();
+      btn.textContent = on ? '🔊 Sound: On' : '🔇 Sound: Muted';
+      btn.title = on
+        ? 'Sound Effects Enabled (Click to Mute)'
+        : 'Sound Muted (Click to Unmute / Unlock iOS Audio)';
+      btn.classList.toggle('active', on);
+    }
+
+    function applyAnisotropyToAllTextures(anisoLevel) {
+      scene.traverse((obj) => {
+        if (!obj.material) return;
+        const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+        for (const m of mats) {
+          if (!m) continue;
+          for (const key of ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'emissiveMap']) {
+            const tex = m[key];
+            if (tex && tex.isTexture) {
+              if (tex.anisotropy !== anisoLevel) {
+                tex.anisotropy = anisoLevel;
+                tex.needsUpdate = true;
+              }
+            }
+          }
+        }
+      });
+    }
+
+    function setGraphicsQuality(quality) {
+      if (!['fast', 'smooth', 'ultra'].includes(quality)) quality = 'smooth';
+      currentGraphicsQuality = quality;
+      const targetDpr = getTargetPixelRatio(quality);
+      renderer.setPixelRatio(targetDpr);
+      renderer.setSize(window.innerWidth, window.innerHeight);
+
+      const maxAniso = renderer.capabilities ? renderer.capabilities.getMaxAnisotropy() : 8;
+
+      if (quality === 'fast') {
+        // Fast Mode: Extreme high-framerate optimization for mobile & low-power GPUs
+        // - Shadows disabled (0 shadow draw calls)
+        // - Clamped pixel ratio to 1.0 (zero super-sampling fill-rate cost)
+        // - Reduced environment reflections to minimal (0.12)
+        // - Ambient fill compensation so scene remains readable and clear
+        // - Tighter point light evaluation radius (11m)
+        // - Anisotropy set to 1 (fast linear filtering)
+        renderer.shadowMap.enabled = false;
+        keyLight.castShadow = false;
+        if ('environmentIntensity' in scene) {
+          scene.environmentIntensity = 0.12;
+        }
+        hemiLight.intensity = 0.82;
+        keyLight.intensity = 2.15;
+        rimLight.intensity = 0.50;
+        southFillLight.intensity = 0.35;
+        for (const bl of brazierLights) {
+          bl.distance = 11.0;
+        }
+        applyAnisotropyToAllTextures(1);
+      } else if (quality === 'ultra') {
+        // Ultra Mode: Presentation-grade cinematic fidelity for high-end desktop GPUs
+        // - Crisp 2048x2048 soft shadow map with tightly bounded frustum & minimal acne bias
+        // - Native Retina / 2x resolution super-sampling
+        // - Rich metallic & marble reflections (environmentIntensity = 0.38)
+        // - Full Cathedral light falloff and brazier firelight reach (18.0m)
+        // - Full 16x hardware anisotropic filtering across all stone and wood textures
+        renderer.shadowMap.enabled = true;
+        keyLight.castShadow = true;
+        keyLight.shadow.mapSize.width = 2048;
+        keyLight.shadow.mapSize.height = 2048;
+        keyLight.shadow.bias = -0.0003;
+        keyLight.shadow.normalBias = 0.018;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        if ('environmentIntensity' in scene) {
+          scene.environmentIntensity = 0.38;
+        }
+        hemiLight.intensity = 0.62;
+        keyLight.intensity = 2.75;
+        rimLight.intensity = 0.72;
+        southFillLight.intensity = 0.52;
+        for (const bl of brazierLights) {
+          bl.distance = 18.0;
+        }
+        applyAnisotropyToAllTextures(maxAniso);
+      } else {
+        // Smooth Mode: Balanced 60 FPS standard for everyday play
+        // - Balanced 1024x1024 PCF soft shadow map with optimized cadence
+        // - Smart Retina pixel ratio (Math.min(dpr, 1.35)) to eliminate jagged edges without 4K overdraw
+        // - Balanced environment reflections (0.24)
+        // - 4x anisotropic filtering for clean chessboard rank/file tiles
+        // - Brazier reach balanced at 15.0m
+        renderer.shadowMap.enabled = true;
+        keyLight.castShadow = true;
+        keyLight.shadow.mapSize.width = 1024;
+        keyLight.shadow.mapSize.height = 1024;
+        keyLight.shadow.bias = -0.0004;
+        keyLight.shadow.normalBias = 0.024;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        if ('environmentIntensity' in scene) {
+          scene.environmentIntensity = 0.24;
+        }
+        hemiLight.intensity = 0.62;
+        keyLight.intensity = 2.45;
+        rimLight.intensity = 0.68;
+        southFillLight.intensity = 0.48;
+        for (const bl of brazierLights) {
+          bl.distance = 15.0;
+        }
+        applyAnisotropyToAllTextures(Math.min(4, maxAniso));
+      }
+
+      if (keyLight.shadow.map) {
+        keyLight.shadow.map.dispose();
+        keyLight.shadow.map = null;
+      }
+      renderer.shadowMap.needsUpdate = true;
+      updateGraphicsToggleUI();
+      return quality;
+    }
+
+    function cycleGraphicsQuality() {
+      const order = ['smooth', 'fast', 'ultra'];
+      const nextIdx = (order.indexOf(currentGraphicsQuality) + 1) % order.length;
+      return setGraphicsQuality(order[nextIdx]);
     }
 
     // Realistic Gaseous GLSL Brazier Flames & Soft Warm Firelight Glow (zero bouncing shapes)
@@ -1593,9 +1674,10 @@ export function initWizardChess() {
     function setCameraForSide(color, immediate = false) {
       // White sits at +Z looking toward -Z (across the Obsidian Altar down the Cathedral Nave & Rose Window)
       // Black sits at -Z looking toward +Z (across the Obsidian Altar toward the South Narthex Royal Amber Triptych)
+      const isMobile = window.innerWidth <= 768;
       const zSign = color === 'b' ? -1 : 1;
-      const desiredPos = new THREE.Vector3(0, 2.22, zSign * 2.72);
-      const desiredTarget = new THREE.Vector3(0, 0.85, zSign * -0.15);
+      const desiredPos = new THREE.Vector3(0, isMobile ? 2.52 : 2.22, zSign * (isMobile ? 3.12 : 2.72));
+      const desiredTarget = new THREE.Vector3(0, isMobile ? 0.78 : 0.85, zSign * (isMobile ? -0.22 : -0.15));
       if (immediate) {
         activeCamTransition = null;
         camera.position.copy(desiredPos);
@@ -2109,6 +2191,63 @@ export function initWizardChess() {
       pooledDotMeshes.push(dotM);
     }
 
+    // 3D Animated Keyboard Cursor Square Bracket on the board
+    const cursorEdgesGeo = new THREE.EdgesGeometry(new THREE.PlaneGeometry(BOARD_SQ_SIZE * 0.94, BOARD_SQ_SIZE * 0.94));
+    cursorEdgesGeo.rotateX(-Math.PI / 2);
+    const cursorLineMat = new THREE.LineBasicMaterial({
+      color: 0x38bdf8,
+      linewidth: 2,
+      transparent: true,
+      opacity: 0.95
+    });
+    const keyboardCursorMesh = new THREE.LineSegments(cursorEdgesGeo, cursorLineMat);
+    keyboardCursorMesh.visible = false;
+    squareHighlightsGroup.add(keyboardCursorMesh);
+
+    const cursorFillGeo = new THREE.PlaneGeometry(BOARD_SQ_SIZE * 0.90, BOARD_SQ_SIZE * 0.90);
+    cursorFillGeo.rotateX(-Math.PI / 2);
+    const cursorFillMat = new THREE.MeshBasicMaterial({
+      color: 0x38bdf8,
+      transparent: true,
+      opacity: 0.18,
+      side: THREE.DoubleSide
+    });
+    const keyboardCursorFillMesh = new THREE.Mesh(cursorFillGeo, cursorFillMat);
+    keyboardCursorFillMesh.visible = false;
+    squareHighlightsGroup.add(keyboardCursorFillMesh);
+
+    const keyboardCursor = {
+      active: false,
+      r: 6,
+      c: 4,
+      pendingFile: null
+    };
+
+    const FILES_LIST = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
+    function rcToSquareNotation(r, c) {
+      if (r < 0 || r > 7 || c < 0 || c > 7) return '--';
+      return `${FILES_LIST[c]}${8 - r}`;
+    }
+
+    function updateKeyboardCursorUI() {
+      // Badge removed
+    }
+
+    function setKeyboardCursorPos(r, c, selectNow = false) {
+      keyboardCursor.r = Math.max(0, Math.min(7, r));
+      keyboardCursor.c = Math.max(0, Math.min(7, c));
+      keyboardCursor.active = true;
+      const pos = boardToWorld(keyboardCursor.r, keyboardCursor.c);
+      keyboardCursorMesh.position.set(pos.x, BOARD_SURFACE_Y + 0.015, pos.z);
+      keyboardCursorFillMesh.position.set(pos.x, BOARD_SURFACE_Y + 0.013, pos.z);
+      keyboardCursorMesh.visible = true;
+      keyboardCursorFillMesh.visible = true;
+      updateKeyboardCursorUI();
+      if (selectNow && typeof interactWithSquare === 'function') {
+        interactWithSquare(keyboardCursor.r, keyboardCursor.c);
+      }
+    }
+
     function clearSquareHighlights() {
       pooledSelMesh.visible = false;
       for (let i = 0; i < pooledCapMeshes.length; i++) pooledCapMeshes[i].visible = false;
@@ -2163,7 +2302,19 @@ export function initWizardChess() {
     function spawnStoneShatter(worldPos, color) {
       soundEngine.playStoneShatterSound();
       const mat = color === 'w' ? whitePieceMat : blackPieceMat;
-      const count = Math.min(32, shardPool.length);
+      const count =
+        currentGraphicsQuality === 'fast'
+          ? 10
+          : currentGraphicsQuality === 'ultra'
+            ? Math.min(36, shardPool.length)
+            : 20;
+      const baseLife =
+        currentGraphicsQuality === 'fast'
+          ? 1.2
+          : currentGraphicsQuality === 'ultra'
+            ? 2.5
+            : 1.8;
+
       for (let i = 0; i < count; i++) {
         const shard = shardPool[i];
         shard.mesh.material = mat;
@@ -2185,12 +2336,12 @@ export function initWizardChess() {
           Math.random() * 9,
           Math.random() * 9
         );
-        shard.life = 2.2;
+        shard.life = baseLife;
         shard.active = true;
         shard.mesh.visible = true;
       }
       impactFlashLight.position.set(worldPos.x, worldPos.y + 0.4, worldPos.z);
-      impactFlashLight.intensity = 7.5;
+      impactFlashLight.intensity = currentGraphicsQuality === 'fast' ? 4.0 : 7.5;
     }
 
     // =========================================================================
@@ -2347,17 +2498,27 @@ export function initWizardChess() {
         endPos.z - dirZ * stopOffset
       );
 
-      // Collect all bystander pieces (both friendly and enemy) on the board for concrete collision avoidance
+      // Collect only bystanders close to the movement corridor for collision avoidance (O(1) execution)
       const bystanders = [];
+      const moveDx = endPos.x - startPos.x;
+      const moveDz = endPos.z - startPos.z;
+      const moveLenSq = moveDx * moveDx + moveDz * moveDz || 1;
       for (let r = 0; r < 8; r++) {
         for (let c = 0; c < 8; c++) {
           const other = boardState[r][c];
           if (other && other !== piece && other !== captured && other.mesh) {
-            bystanders.push({
-              piece: other,
-              homePos: boardToWorld(r, c),
-              height: PIECE_HEIGHTS[other.type] || 0.45
-            });
+            const hp = boardToWorld(r, c);
+            const t = Math.max(0, Math.min(1, ((hp.x - startPos.x) * moveDx + (hp.z - startPos.z) * moveDz) / moveLenSq));
+            const projX = startPos.x + t * moveDx;
+            const projZ = startPos.z + t * moveDz;
+            const distSq = (hp.x - projX) * (hp.x - projX) + (hp.z - projZ) * (hp.z - projZ);
+            if (distSq < 0.22) {
+              bystanders.push({
+                piece: other,
+                homePos: hp,
+                height: PIECE_HEIGHTS[other.type] || 0.45
+              });
+            }
           }
         }
       }
@@ -2602,24 +2763,22 @@ export function initWizardChess() {
         cameraTelemetry.lastSpaceMoveSamples = [];
       }
 
-      // Distance-scaled piece movement duration (slowed by ~12-18% + scaled per square so 4-5 space Bishop/Rook/Queen glides feel weighty and unhurried):
-      // - 1 square move: 0.64s
-      // - 4-5 square move: 1.10s - 1.29s
+      // Snappy, fluid, and responsive piece movement (0.36s - 0.52s):
       const squaresMoved = Math.max(1, Math.hypot(toR - fromR, toC - fromC));
-      const stdMoveDuration = Number((0.64 + Math.max(0, squaresMoved - 1) * 0.14).toFixed(3));
+      const baseDuration = currentGraphicsQuality === 'fast' ? 0.32 : currentGraphicsQuality === 'ultra' ? 0.44 : 0.36;
+      const stdMoveDuration = Number((baseDuration + Math.max(0, squaresMoved - 1) * 0.05).toFixed(3));
       const atkProfile = ATTACK_SYNC_PROFILES[piece.type] || ATTACK_SYNC_PROFILES.queen;
       const SWING_START_CLIP_TIME = atkProfile.swingStartClip;
-      const CONTACT_CLIP_TIME = atkProfile.contactClip; // Weapon physically strikes defender, triggering flash & flinch
-      const BLOW_CLIP_TIME = atkProfile.blowClip;       // After visible weapon impact, defender explodes into stone shards
+      const CONTACT_CLIP_TIME = atkProfile.contactClip;
+      const BLOW_CLIP_TIME = atkProfile.blowClip;
       const tApproach = isCapture
-        ? Number((0.66 + Math.max(0, squaresMoved - 1) * 0.125).toFixed(3))
+        ? Number((baseDuration + 0.05 + Math.max(0, squaresMoved - 1) * 0.045).toFixed(3))
         : stdMoveDuration;
       const tContact = isCapture ? (tApproach + CONTACT_CLIP_TIME / atkProfile.timeScale) : stdMoveDuration;
       const tImpact = isCapture ? (tApproach + BLOW_CLIP_TIME / atkProfile.timeScale) : stdMoveDuration;
-      const tStrikeDone = isCapture ? (tImpact + 0.48) : stdMoveDuration;
-      // Slower, distance-aware post-attack camera return (~1.30s - 1.60s instead of 0.64s)
+      const tStrikeDone = isCapture ? (tImpact + 0.35) : stdMoveDuration;
       const camReturnDist = savedCamPos.distanceTo(duelCamClose);
-      const returnDuration = isCapture ? Number((1.18 + Math.min(0.42, camReturnDist * 0.10)).toFixed(3)) : 0;
+      const returnDuration = isCapture ? Number((0.75 + Math.min(0.24, camReturnDist * 0.06)).toFixed(3)) : 0;
       const totalDuration = isCapture ? (tStrikeDone + returnDuration) : stdMoveDuration;
 
       if (!isCapture) {
@@ -2716,16 +2875,18 @@ export function initWizardChess() {
           }
           const pDelta = piece.mesh.position.distanceTo(prevPiecePos);
           prevPiecePos.copy(piece.mesh.position);
-          cameraTelemetry.lastSpaceMoveSamples.push({
-            t: Number(elapsed.toFixed(3)),
-            u: Number(u.toFixed(3)),
-            piecePos: [
-              Number(piece.mesh.position.x.toFixed(3)),
-              Number(piece.mesh.position.y.toFixed(3)),
-              Number(piece.mesh.position.z.toFixed(3))
-            ],
-            pieceStep: Number(pDelta.toFixed(4))
-          });
+          if (isAutomatedTest) {
+            cameraTelemetry.lastSpaceMoveSamples.push({
+              t: Number(elapsed.toFixed(3)),
+              u: Number(u.toFixed(3)),
+              piecePos: [
+                Number(piece.mesh.position.x.toFixed(3)),
+                Number(piece.mesh.position.y.toFixed(3)),
+                Number(piece.mesh.position.z.toFixed(3))
+              ],
+              pieceStep: Number(pDelta.toFixed(4))
+            });
+          }
           if (u >= 1) {
             finishMove();
             return true;
@@ -2900,27 +3061,29 @@ export function initWizardChess() {
         prevCamPos.copy(camera.position);
         prevPiecePos.copy(piece.mesh.position);
 
-        cameraTelemetry.lastAttackSamples.push({
-          t: Number(elapsed.toFixed(3)),
-          phase: phaseName,
-          camStep: Number(stepDelta.toFixed(4)),
-          pieceStep: Number(pieceStepDelta.toFixed(4)),
-          pos: [
-            Number(camera.position.x.toFixed(3)),
-            Number(camera.position.y.toFixed(3)),
-            Number(camera.position.z.toFixed(3))
-          ],
-          target: [
-            Number(orbitControls.target.x.toFixed(3)),
-            Number(orbitControls.target.y.toFixed(3)),
-            Number(orbitControls.target.z.toFixed(3))
-          ],
-          piecePos: [
-            Number(piece.mesh.position.x.toFixed(3)),
-            Number(piece.mesh.position.y.toFixed(3)),
-            Number(piece.mesh.position.z.toFixed(3))
-          ]
-        });
+        if (isAutomatedTest) {
+          cameraTelemetry.lastAttackSamples.push({
+            t: Number(elapsed.toFixed(3)),
+            phase: phaseName,
+            camStep: Number(stepDelta.toFixed(4)),
+            pieceStep: Number(pieceStepDelta.toFixed(4)),
+            pos: [
+              Number(camera.position.x.toFixed(3)),
+              Number(camera.position.y.toFixed(3)),
+              Number(camera.position.z.toFixed(3))
+            ],
+            target: [
+              Number(orbitControls.target.x.toFixed(3)),
+              Number(orbitControls.target.y.toFixed(3)),
+              Number(orbitControls.target.z.toFixed(3))
+            ],
+            piecePos: [
+              Number(piece.mesh.position.x.toFixed(3)),
+              Number(piece.mesh.position.y.toFixed(3)),
+              Number(piece.mesh.position.z.toFixed(3))
+            ]
+          });
+        }
 
         if (elapsed >= totalDuration) {
           finishMove();
@@ -3523,19 +3686,155 @@ export function initWizardChess() {
       return false;
     }
 
+    let isMatchmakingLocked = false;
+
     window.addEventListener('keydown', (e) => {
       if (isTypingInInput(document.activeElement)) return;
+      if (isMatchmakingLocked) return;
       if (e.ctrlKey || e.metaKey || e.altKey) return;
 
-      if (CAM_MOVE_KEY_CODES.has(e.code)) {
+      // WASD + R/F: Camera translation (fly/pan)
+      if (e.code === 'KeyW' || e.code === 'KeyA' || e.code === 'KeyS' || e.code === 'KeyD' || e.code === 'KeyR' || e.code === 'KeyF') {
         e.preventDefault();
         heldCameraKeys.add(e.code);
         return;
       }
 
+      // Shift + Arrows: Camera Rotation (orbit)
+      if (e.shiftKey && (e.code === 'ArrowUp' || e.code === 'ArrowDown' || e.code === 'ArrowLeft' || e.code === 'ArrowRight')) {
+        e.preventDefault();
+        heldCameraKeys.add(e.code);
+        return;
+      }
+
+      // Plain Arrow Keys: Keyboard Chessboard Cursor Navigation
+      if (e.code === 'ArrowUp' || e.code === 'ArrowDown' || e.code === 'ArrowLeft' || e.code === 'ArrowRight') {
+        e.preventDefault();
+        const fwd = playerColor === 'b' ? 1 : -1;
+        const rgt = playerColor === 'b' ? -1 : 1;
+        if (!keyboardCursor.active) {
+          keyboardCursor.active = true;
+          keyboardCursor.r = playerColor === 'b' ? 1 : 6;
+          keyboardCursor.c = 4;
+        } else {
+          if (e.code === 'ArrowUp') keyboardCursor.r = Math.max(0, Math.min(7, keyboardCursor.r + fwd));
+          else if (e.code === 'ArrowDown') keyboardCursor.r = Math.max(0, Math.min(7, keyboardCursor.r - fwd));
+          else if (e.code === 'ArrowRight') keyboardCursor.c = Math.max(0, Math.min(7, keyboardCursor.c + rgt));
+          else if (e.code === 'ArrowLeft') keyboardCursor.c = Math.max(0, Math.min(7, keyboardCursor.c - rgt));
+        }
+        setKeyboardCursorPos(keyboardCursor.r, keyboardCursor.c, false);
+        soundEngine.playMoveClickSound();
+        return;
+      }
+
+      // Space or Enter: Select Piece or Confirm Move to current Cursor Square
+      if (e.code === 'Space' || e.code === 'Enter' || e.code === 'NumpadEnter') {
+        e.preventDefault();
+        if (!keyboardCursor.active) {
+          setKeyboardCursorPos(playerColor === 'b' ? 1 : 6, 4, true);
+        } else {
+          interactWithSquare(keyboardCursor.r, keyboardCursor.c);
+        }
+        return;
+      }
+
+      // Tab: Cycle through own pieces with legal moves (Shift+Tab = reverse)
+      if (e.code === 'Tab') {
+        e.preventDefault();
+        cycleSelectMovablePiece(e.shiftKey);
+        return;
+      }
+
+      // Escape: Cancel selection or hide cursor
+      if (e.code === 'Escape') {
+        if (selectedSquare) {
+          clearSquareHighlights();
+          selectedSquare = null;
+          validMoves = [];
+          soundEngine.playSelectSound();
+        } else {
+          keyboardCursor.active = false;
+          keyboardCursorMesh.visible = false;
+          keyboardCursorFillMesh.visible = false;
+          updateKeyboardCursorUI();
+        }
+        return;
+      }
+
+      // Direct Algebraic Coordinate entry: A-H then 1-8 (e.g. typing "e" then "4" selects/moves to e4)
+      const keyLower = e.key.toLowerCase();
+      if (keyLower >= 'a' && keyLower <= 'h') {
+        keyboardCursor.pendingFile = keyLower;
+        const toastEl = document.getElementById('keyboard-toast');
+        if (toastEl) {
+          toastEl.textContent = `Target: ${keyLower.toUpperCase()}... (Press 1-8)`;
+          toastEl.classList.add('visible');
+          setTimeout(() => toastEl.classList.remove('visible'), 2500);
+        }
+        return;
+      }
+      if (e.key >= '1' && e.key <= '8') {
+        if (keyboardCursor.pendingFile) {
+          const col = keyboardCursor.pendingFile.charCodeAt(0) - 97;
+          const row = 8 - parseInt(e.key, 10);
+          keyboardCursor.pendingFile = null;
+          setKeyboardCursorPos(row, col, true);
+          return;
+        }
+      }
+
+      // Quick Camera numbers (1: Player, 2: Top, 3: Side, 4: Cathedral)
+      if (e.code === 'Digit1' || e.code === 'Numpad1') {
+        e.preventDefault();
+        setCameraPreset('player');
+        return;
+      }
+      if (e.code === 'Digit2' || e.code === 'Numpad2') {
+        e.preventDefault();
+        setCameraPreset('top');
+        return;
+      }
+      if (e.code === 'Digit3' || e.code === 'Numpad3') {
+        e.preventDefault();
+        setCameraPreset('side');
+        return;
+      }
+      if (e.code === 'Digit4' || e.code === 'Numpad4') {
+        e.preventDefault();
+        setCameraPreset('wide');
+        return;
+      }
+
+      // Atmosphere hotkeys
+      if (e.code === 'KeyM') {
+        e.preventDefault();
+        soundEngine.toggleMute();
+        updateSoundToggleUI();
+        return;
+      }
+      if (e.code === 'KeyG') {
+        e.preventDefault();
+        cycleGraphicsQuality();
+        return;
+      }
       if (e.code === 'KeyH' || e.code === 'KeyU') {
         e.preventDefault();
         toggleUI();
+        return;
+      }
+
+      // Toggle Chat (C)
+      if (e.code === 'KeyC') {
+        e.preventDefault();
+        window.dispatchEvent(new CustomEvent('toggle-chat'));
+        return;
+      }
+
+      // Toggle Keyboard Shortcuts Modal (? or K)
+      if (e.code === 'KeyK' || e.key === '?' || (e.shiftKey && e.code === 'Slash')) {
+        e.preventDefault();
+        window.dispatchEvent(new CustomEvent('toggle-shortcuts-modal'));
+        return;
       }
     });
 
@@ -3862,7 +4161,9 @@ export function initWizardChess() {
       const roomPill = document.getElementById('room-pill');
       const capturedTray = document.getElementById('captured-tray');
 
-      turnDot.className = 'turn-dot' + (currentTurn === 'b' ? ' black' : '');
+      if (turnDot) {
+        turnDot.className = 'turn-dot' + (currentTurn === 'b' ? ' black' : '');
+      }
 
       const legalMoves = getAllLegalMoves(currentTurn);
       const inCheck = isKingInCheck(currentTurn, boardState);
@@ -3871,23 +4172,25 @@ export function initWizardChess() {
         gameOver = true;
         if (inCheck) {
           const winner = currentTurn === 'w' ? 'Black' : 'White';
-          turnText.textContent = `Checkmate — ${winner} Wins`;
+          if (turnText) turnText.textContent = `Checkmate — ${winner} Wins`;
           if (!checkmateState.active) {
             triggerCheckmateSequence(currentTurn, currentTurn === 'w' ? 'b' : 'w');
           }
         } else {
-          turnText.textContent = 'Stalemate — Draw';
+          if (turnText) turnText.textContent = 'Stalemate — Draw';
         }
       } else {
         const turnLabel = currentTurn === 'w' ? 'White to Move' : 'Black to Move';
         const aiColor = playerColor === 'w' ? 'b' : 'w';
         const isAiTurn = !scriptedGameActive && gameMode === 'single' && currentTurn === aiColor;
-        if (inCheck) {
-          turnText.textContent = `${turnLabel} (Check!)`;
-        } else if (isAiTurn) {
-          turnText.textContent = `${turnLabel} (AI)...`;
-        } else {
-          turnText.textContent = turnLabel;
+        if (turnText) {
+          if (inCheck) {
+            turnText.textContent = `${turnLabel} (Check!)`;
+          } else if (isAiTurn) {
+            turnText.textContent = `${turnLabel} (AI)...`;
+          } else {
+            turnText.textContent = turnLabel;
+          }
         }
       }
 
@@ -3895,20 +4198,22 @@ export function initWizardChess() {
         modeBadge.textContent = `Playing as ${playerColor === 'w' ? 'White' : 'Black'}`;
       }
       if (btnAiMove) {
-        btnAiMove.style.display = 'inline-flex';
+        btnAiMove.style.display = gameMode === 'multi' ? 'none' : 'inline-flex';
       }
       if (btnSideToggle) {
-        btnSideToggle.style.display = 'inline-flex';
+        btnSideToggle.style.display = gameMode === 'multi' ? 'none' : 'inline-flex';
         btnSideToggle.textContent = playerColor === 'w' ? 'Play as Black' : 'Play as White';
       }
       if (roomPill) {
         roomPill.style.display = 'none';
       }
 
-      if (capturedByWhite > 0 || capturedByBlack > 0) {
-        capturedTray.textContent = `Captured — White: ${capturedByWhite} | Black: ${capturedByBlack}`;
-      } else {
-        capturedTray.textContent = '';
+      if (capturedTray) {
+        if (capturedByWhite > 0 || capturedByBlack > 0) {
+          capturedTray.textContent = `Captured — White: ${capturedByWhite} | Black: ${capturedByBlack}`;
+        } else {
+          capturedTray.textContent = '';
+        }
       }
       if (typeof updateScriptBarUI === 'function') updateScriptBarUI();
     }
@@ -3940,11 +4245,15 @@ export function initWizardChess() {
 
     renderer.domElement.addEventListener('pointerup', (e) => {
       const moveDist = Math.hypot(e.clientX - pointerDownPos.x, e.clientY - pointerDownPos.y);
-      if (moveDist > 6) return;
+      const maxAllowed = e.pointerType === 'touch' ? 14 : 7;
+      if (moveDist > maxAllowed) return;
       if (isAnimatingMove || gameOver) return;
 
       // Enforce turn ownership in Multiplayer, and in Single Player only block while AI auto-move timer is actively pending
-      if (gameMode === 'multi' && currentTurn !== playerColor) return;
+      if (gameMode === 'multi') {
+        if (onlineManager.state.role === 'spectator') return;
+        if (currentTurn !== playerColor) return;
+      }
       if (!scriptedGameActive && gameMode === 'single' && currentTurn !== playerColor && aiTimer !== null) return;
 
       const rect = renderer.domElement.getBoundingClientRect();
@@ -3952,6 +4261,8 @@ export function initWizardChess() {
       pointer.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
 
       raycaster.setFromCamera(pointer, camera);
+
+      if (isMatchmakingLocked) return;
 
       if (raycastTargets.length === 0) updateRaycastTargets();
       const hits = raycaster.intersectObjects(raycastTargets, true);
@@ -3981,6 +4292,19 @@ export function initWizardChess() {
       }
 
       if (clickedR === -1) return;
+      setKeyboardCursorPos(clickedR, clickedC, false);
+      interactWithSquare(clickedR, clickedC);
+    });
+
+    function interactWithSquare(clickedR, clickedC) {
+      if (isAnimatingMove || gameOver || isMatchmakingLocked) return false;
+
+      // Enforce turn ownership in Multiplayer, and in Single Player only block while AI auto-move timer is actively pending
+      if (gameMode === 'multi') {
+        if (onlineManager.state.role === 'spectator') return false;
+        if (currentTurn !== playerColor) return false;
+      }
+      if (!scriptedGameActive && gameMode === 'single' && currentTurn !== playerColor && aiTimer !== null) return false;
 
       // Cancel any pending scripted pre-move highlight timer when the user manually interacts with the board
       if (preMoveHighlightTask) {
@@ -3995,22 +4319,81 @@ export function initWizardChess() {
         );
         if (move) {
           executeChessMove(selectedSquare.r, selectedSquare.c, move.r, move.c);
-          return;
+          return true;
         }
       }
 
-      const clickedPiece = boardState[clickedR][clickedC];
+      const clickedPiece = boardState[clickedR]?.[clickedC];
       if (clickedPiece && clickedPiece.color === currentTurn) {
         selectedSquare = { r: clickedR, c: clickedC };
         validMoves = getLegalMovesForPiece(clickedR, clickedC);
         showSquareHighlights(clickedR, clickedC, validMoves);
         soundEngine.playSelectSound();
+        return true;
       } else {
         clearSquareHighlights();
         selectedSquare = null;
         validMoves = [];
+        return false;
       }
-    });
+    }
+
+    function cycleSelectMovablePiece(reverse = false) {
+      if (isAnimatingMove || gameOver) return;
+      if (gameMode === 'multi' && currentTurn !== playerColor) return;
+      if (gameMode === 'single' && currentTurn !== playerColor && aiTimer !== null) return;
+
+      const candidates = [];
+      for (let r = 0; r < 8; r++) {
+        for (let c = 0; c < 8; c++) {
+          const p = boardState[r][c];
+          if (p && p.color === currentTurn) {
+            const moves = getLegalMovesForPiece(r, c);
+            if (moves.length > 0) {
+              candidates.push({ r, c, type: p.type });
+            }
+          }
+        }
+      }
+      if (candidates.length === 0) return;
+
+      let nextIdx = 0;
+      if (selectedSquare) {
+        const curIdx = candidates.findIndex((c) => c.r === selectedSquare.r && c.c === selectedSquare.c);
+        if (curIdx !== -1) {
+          nextIdx = reverse ? (curIdx - 1 + candidates.length) % candidates.length : (curIdx + 1) % candidates.length;
+        }
+      }
+      const target = candidates[nextIdx];
+      setKeyboardCursorPos(target.r, target.c, true);
+    }
+
+    function resignMatch(resigningColor = playerColor) {
+      const loserColor = resigningColor === 'b' ? 'b' : 'w';
+      const winnerColor = loserColor === 'w' ? 'b' : 'w';
+      gameOver = true;
+      clearSquareHighlights();
+      selectedSquare = null;
+      validMoves = [];
+      if (aiTimer) {
+        clearTimeout(aiTimer);
+        aiTimer = null;
+      }
+      const turnText = document.getElementById('turn-text');
+      if (turnText) {
+        turnText.textContent = `${winnerColor === 'w' ? 'White' : 'Black'} Wins (Resignation)`;
+      }
+      triggerCheckmateSequence(loserColor, winnerColor);
+      const subEl = document.getElementById('checkmate-subtitle');
+      if (subEl) {
+        subEl.textContent = `${winnerColor === 'w' ? 'White' : 'Black'} Triumphs • ${loserColor === 'w' ? 'White' : 'Black'} Resigned the Match`;
+      }
+      const titleEl = document.getElementById('checkmate-title');
+      if (titleEl) {
+        titleEl.textContent = 'Match Conceded';
+      }
+      return { winner: winnerColor, loser: loserColor };
+    }
 
     // =========================================================================
     // Multiplayer Room Synchronization (Same-Origin API + Static Site Fallback)
@@ -4092,7 +4475,7 @@ export function initWizardChess() {
 
     async function sendMultiplayerMove(movePayload) {
       if (!roomCode) return;
-      // 1. Update static local/BroadcastChannel room store immediately
+      onlineManager.sendMove(movePayload.from, movePayload.to, movePayload.promotion || 'queen');
       const stRoom = getStaticRoom(roomCode);
       if (stRoom) {
         stRoom.moves = stRoom.moves || [];
@@ -4108,12 +4491,6 @@ export function initWizardChess() {
         stRoom.updatedAt = Date.now();
         saveAndBroadcastStaticRoom(stRoom);
       }
-      // 2. Also broadcast to cloud/local room API if reachable
-      await mpApiRequest(`/api/rooms/${roomCode}/move`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(movePayload)
-      });
     }
 
     function stopMultiplayerSync() {
@@ -4656,6 +5033,24 @@ export function initWizardChess() {
       stepScriptForward,
       stepScriptBackward,
       triggerCheckmateSequence,
+      resignMatch,
+      setMatchmakingLocked: (val) => {
+        isMatchmakingLocked = Boolean(val);
+        if (isMatchmakingLocked) {
+          clearSquareHighlights();
+          selectedSquare = null;
+          validMoves = [];
+        }
+      },
+      isMatchmakingLocked: () => isMatchmakingLocked,
+      setVolume: (val) => soundEngine.setVolume(val),
+      getVolume: () => soundEngine.getVolume(),
+      playChatNotificationSound: () => soundEngine.playChatNotificationSound(),
+      playMatchFoundSound: () => soundEngine.playMatchFoundSound(),
+      interactWithSquare,
+      setKeyboardCursorPos,
+      cycleSelectMovablePiece,
+      getKeyboardCursor: () => ({ ...keyboardCursor }),
       testColumnCollisionSlide: (startArr, endArr, steps = 20) => {
         activeCamTransition = null;
         camera.position.set(startArr[0], startArr[1], startArr[2]);
@@ -4682,13 +5077,18 @@ export function initWizardChess() {
         roomCode = code;
         appliedMoveSeq = 0;
         resetChessBoard(true);
-        startMultiplayerSync(code);
+        if (playerColor === 'b') {
+          setCameraForSide('b', false);
+        } else {
+          setCameraForSide('w', false);
+        }
       },
       stopOnlineGame: () => {
         stopMultiplayerSync();
         gameMode = 'single';
         roomCode = null;
         resetChessBoard(true);
+        setCameraForSide('w', false);
       },
       setSinglePlayerSide: (color) => {
         stopMultiplayerSync();
@@ -5104,8 +5504,8 @@ export function initWizardChess() {
           d.vel.x *= 0.72;
           d.vel.z *= 0.72;
         }
-        // Localized 9-tile collision check (optimized from 64 tiles per shard)
-        if (d.mesh.position.y < BOARD_SURFACE_Y + 0.48) {
+        // Localized 9-tile collision check (only evaluated in smooth and ultra modes; skipped in fast mode for zero-CPU cost)
+        if (currentGraphicsQuality !== 'fast' && d.mesh.position.y < BOARD_SURFACE_Y + 0.48) {
           const approxC = Math.round(d.mesh.position.x / BOARD_SQ_SIZE + 3.5);
           const approxR = Math.round(d.mesh.position.z / BOARD_SQ_SIZE + 3.5);
           const minR = Math.max(0, approxR - 1);
@@ -5144,31 +5544,59 @@ export function initWizardChess() {
       }
 
       // Advance volumetric GLSL brazier flames & active warm firelight flicker
-      for (let i = 0; i < brazierFireUniforms.length; i++) {
-        brazierFireUniforms[i].uTime.value = elapsedTotal;
-      }
-      for (let i = 0; i < brazierGlowSprites.length; i++) {
-        const sp = brazierGlowSprites[i];
-        const baseOp = sp.userData.baseOpacity || 0.4;
-        const seed = sp.userData.seed || 0;
-        sp.material.opacity =
-          baseOp +
-          Math.sin(elapsedTotal * 5.2 + seed) * 0.045 +
-          Math.cos(elapsedTotal * 8.4 + seed * 1.3) * 0.025;
-      }
-      for (let i = 0; i < brazierLights.length; i++) {
-        const baseInt = brazierLights[i].userData.baseIntensity || 3.2;
-        brazierLights[i].intensity =
-          baseInt +
-          Math.sin(elapsedTotal * 5.6 + i * 1.7) * 0.28 +
-          Math.cos(elapsedTotal * 9.1 + i) * 0.16;
+      const shouldUpdateFlames = currentGraphicsQuality !== 'fast' || (shadowFrameCounter % 2 === 0);
+      if (shouldUpdateFlames) {
+        for (let i = 0; i < brazierFireUniforms.length; i++) {
+          brazierFireUniforms[i].uTime.value = elapsedTotal;
+        }
+        for (let i = 0; i < brazierGlowSprites.length; i++) {
+          const sp = brazierGlowSprites[i];
+          const baseOp = sp.userData.baseOpacity || 0.4;
+          const seed = sp.userData.seed || 0;
+          sp.material.opacity =
+            baseOp +
+            Math.sin(elapsedTotal * 5.2 + seed) * 0.045 +
+            Math.cos(elapsedTotal * 8.4 + seed * 1.3) * 0.025;
+        }
+        for (let i = 0; i < brazierLights.length; i++) {
+          const baseInt = brazierLights[i].userData.baseIntensity || 3.2;
+          brazierLights[i].intensity =
+            baseInt +
+            Math.sin(elapsedTotal * 5.6 + i * 1.7) * 0.28 +
+            Math.cos(elapsedTotal * 9.1 + i) * 0.16;
+        }
       }
 
-      // Throttled shadow updates: updates every 2nd frame during animations for huge fill-rate reduction
-      if (isAnimatingMove || activeMoveTweens.length > 0 || checkmateState.active) {
-        shadowFrameCounter++;
-        if (shadowFrameCounter % 2 === 0) {
-          renderer.shadowMap.needsUpdate = true;
+      // Animate 3D keyboard cursor glow and breathing pulse
+      if (keyboardCursorMesh.visible) {
+        const pulse = 0.5 + Math.sin(elapsedTotal * 5.2) * 0.35;
+        cursorFillMat.opacity = 0.12 + pulse * 0.16;
+        cursorLineMat.color.setHSL(0.54 + Math.sin(elapsedTotal * 2.5) * 0.03, 0.95, 0.62 + pulse * 0.18);
+      }
+
+      // High-performance tiered shadow management:
+      // In 'fast' mode: Shadows disabled, 0 shadow draw calls.
+      // In 'smooth' mode: Updates every 3rd frame (~20fps) during piece moves for smooth visual grounding with 66% GPU savings.
+      // In 'ultra' mode: Updates every 2nd frame (~30fps) during piece moves for cinematic fidelity without judder.
+      if (renderer.shadowMap.enabled) {
+        if (currentGraphicsQuality === 'ultra') {
+          if (isAnimatingMove || activeMoveTweens.length > 0) {
+            shadowFrameCounter++;
+            if (shadowFrameCounter % 2 === 0) {
+              renderer.shadowMap.needsUpdate = true;
+            }
+          } else if (checkmateState.active && shadowFrameCounter++ % 4 === 0) {
+            renderer.shadowMap.needsUpdate = true;
+          }
+        } else if (currentGraphicsQuality === 'smooth') {
+          if (isAnimatingMove || activeMoveTweens.length > 0) {
+            shadowFrameCounter++;
+            if (shadowFrameCounter % 3 === 0) {
+              renderer.shadowMap.needsUpdate = true;
+            }
+          } else if (checkmateState.active && shadowFrameCounter++ % 6 === 0) {
+            renderer.shadowMap.needsUpdate = true;
+          }
         }
       }
 
@@ -5188,7 +5616,7 @@ export function initWizardChess() {
       }
       if (manualStepMode) return;
       const rawDt = clock.getDelta();
-      const dt = Math.min(rawDt, 0.1);
+      const dt = Math.min(rawDt, 0.033);
 
       stepScene(dt || 0.016, true);
     }
@@ -5210,7 +5638,12 @@ export function initWizardChess() {
       if (urlSide === 'b' || urlSide === 'black') {
         playerColor = 'b';
       }
-      resetChessBoard(true, true);
+      const urlRoom = params.get('room');
+      if (urlRoom) {
+        onlineManager.joinRoom(urlRoom);
+      } else {
+        resetChessBoard(true, true);
+      }
       updateGraphicsToggleUI();
       updateSoundToggleUI();
 

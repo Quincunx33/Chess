@@ -3,6 +3,8 @@ export interface VoiceChatState {
   connected: boolean;
   connecting: boolean;
   muted: boolean;
+  speakerMuted: boolean;
+  speakerVolume: number;
   peerConnected: boolean;
   peerMuted: boolean;
   peerSpeaking: boolean;
@@ -27,6 +29,8 @@ class VoiceChatManager {
     connected: false,
     connecting: false,
     muted: false,
+    speakerMuted: false,
+    speakerVolume: 1.0,
     peerConnected: false,
     peerMuted: false,
     peerSpeaking: false,
@@ -214,6 +218,42 @@ class VoiceChatManager {
     return true;
   }
 
+  public toggleSpeaker(): boolean {
+    this.state.speakerMuted = !this.state.speakerMuted;
+    const audioEl = document.getElementById('remote-voice-audio') as HTMLAudioElement;
+    if (audioEl) {
+      audioEl.muted = this.state.speakerMuted;
+    }
+    this.notify();
+    return this.state.speakerMuted;
+  }
+
+  public setSpeakerMuted(muted: boolean) {
+    this.state.speakerMuted = Boolean(muted);
+    const audioEl = document.getElementById('remote-voice-audio') as HTMLAudioElement;
+    if (audioEl) {
+      audioEl.muted = this.state.speakerMuted;
+    }
+    this.notify();
+  }
+
+  public setSpeakerVolume(vol: number) {
+    const clamped = Math.max(0, Math.min(1, Number(vol) || 0));
+    this.state.speakerVolume = clamped;
+    const audioEl = document.getElementById('remote-voice-audio') as HTMLAudioElement;
+    if (audioEl) {
+      audioEl.volume = clamped;
+      if (clamped === 0) {
+        audioEl.muted = true;
+        this.state.speakerMuted = true;
+      } else if (this.state.speakerMuted) {
+        audioEl.muted = false;
+        this.state.speakerMuted = false;
+      }
+    }
+    this.notify();
+  }
+
   public stopVoice() {
     if (this.animFrameId) {
       cancelAnimationFrame(this.animFrameId);
@@ -238,6 +278,8 @@ class VoiceChatManager {
       connected: false,
       connecting: false,
       muted: false,
+      speakerMuted: false,
+      speakerVolume: 1.0,
       peerConnected: false,
       peerMuted: false,
       peerSpeaking: false,
